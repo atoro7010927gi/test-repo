@@ -1,0 +1,40 @@
+name: 102-bootStrapping
+
+on:
+  workflow_dispatch:
+    inputs:
+      COMMIT_MESSAGE:
+        required: true
+        default: 'Mule base app was generated from maven archetype'
+      ARCHETYPE_GROUP_ID:
+        required: true
+        default: 'jp.co.ctc.mulesoft'
+      ARCHETYPE_ARTIFACT_ID:
+        type: choice
+        options: 
+        - '!!!--- Please select ---!!!'
+        - tpl0001-base-api
+        - tpl0002-base-batch
+      ARCHETYPE_VERSION:
+        required: true
+        default: '1.0.0'
+      MULE_APP_GROUP_ID:
+        required: true
+        default: 'jp.co.ctc.mulesoft'
+      MULE_APP_VERSION:
+        required: true
+        default: '1.0.0-SNAPSHOT'
+
+jobs:
+  # Generate Mule app from maven archetype
+  call-generateMuleAppWorkflow:
+    if: startsWith(github.ref, 'refs/heads/dev/') || startsWith(github.ref, 'refs/heads/develop/')
+    uses: ./.github/workflows/201-generateMuleApp.yaml
+    with:
+      BRANCH_NAME:  ${{ github.ref_name }}
+      COMMIT_MESSAGE: ${{ github.event.inputs.COMMIT_MESSAGE }}
+      ARCHETYPE_GROUP_ID: ${{ github.event.inputs.ARCHETYPE_GROUP_ID }}
+      ARCHETYPE_ARTIFACT_ID: ${{ github.event.inputs.ARCHETYPE_ARTIFACT_ID }}
+      ARCHETYPE_VERSION: ${{ github.event.inputs.ARCHETYPE_VERSION }}
+      MULE_APP_GROUP_ID: ${{ github.event.inputs.MULE_APP_GROUP_ID }}
+      MULE_APP_VERSION: ${{ github.event.inputs.MULE_APP_VERSION }}

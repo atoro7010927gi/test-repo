@@ -1,0 +1,20 @@
+name: 204-createTag
+
+on:
+  workflow_call:
+    inputs:
+      TAG_STRING:
+        required: true
+        type: string
+
+jobs:
+
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - run: git fetch origin ${{ github.event.pull_request.head.ref }}
+      - run: git checkout ${{ github.event.pull_request.head.ref }}
+      - run: git tag ${{ inputs.TAG_STRING }}
+      - run: git push origin ${{ inputs.TAG_STRING }}

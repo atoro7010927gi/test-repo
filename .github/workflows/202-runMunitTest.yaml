@@ -1,0 +1,101 @@
+name: 202-runMunitTest
+
+on:
+  workflow_call:
+    inputs:
+      TARGET_TEST_SUITE:
+        required: true
+        type: string
+
+env:
+  ASSUME_ROLE: arn:aws:iam::335717333268:role/iam_role_github_actoins
+  AWS_REGION: ap-northeast-1
+
+jobs:     
+  run-munit-test:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+
+      ########################################################################################################################
+      # 1. Get secrets from AWS security manager
+      ########################################################################################################################
+      - name: Configure AWS Credentials 
+        uses: aws-actions/configure-aws-credentials@master
+        with:
+          role-to-assume: ${{ env.ASSUME_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ctcGitHubActionSession
+
+      - name: Read secrets from AWS Secrets Manager
+        uses: abhilash1in/aws-secrets-manager-action@v2.0.0
+        with:
+          secrets: |
+            MULE_ENTERPRISE_REPOSITORY*
+            ANYPOINTPF*
+          parse-json: true
+
+
+      ########################################################################################################################
+      # 2. Configure maven-settings.xml
+      ########################################################################################################################
+      - name: Configure maven-settings.xml
+        uses: whelk-io/maven-settings-xml-action@v4
+        with:
+          servers: |
+            [
+              { "id": "mule-enterprise-repository", "username": "${{ env.MULE_ENTERPRISE_REPOSITORY_USERNAME}}", "password": "${{ env.MULE_ENTERPRISE_REPOSITORY_PASSWORD}}" },
+              { "id": "ctc-exchange", "username": "${{ env.ANYPOINTPF_USERNAME}}", "password": "${{ env.ANYPOINTPF_PASSWORD}}" },
+              { "id": "commufa-exchange", "username": "${{ env.ANYPOINTPF_USERNAME}}", "password": "${{ env.ANYPOINTPF_PASSWORD}}" }
+            ]
+
+      ########################################################################################################################
+      # 3. Run MUnit testing
+      ########################################################################################################################
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Restore Cache local Maven repository
+        uses: actions/cache@v2
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Run MUnit testing
+        run: mvn test -Denv.name=dev
+
+      - name: Cache local Maven repository
+        uses: actions/cache@v2
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+
+      ########################################################################################################################
+      # 4. Add MUnit test report to the PR comment
+      ########################################################################################################################
+      - name: Get MUnit testing report content
+        id: getTestingReport
+        if: github.event_name == 'pull_request' && github.event.action == 'opened'
+        uses: QwerMike/xpath-action@v1
+        with:
+          filename: 'target/site/munit/coverage/summary.html'
+          expression: '//body/div[2]'
+      - name: Add MUnit test report to the PR comment
+        if: github.event_name == 'pull_request' && github.event.action == 'opened'
+        uses: mshick/add-pr-comment@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          message: |
+            <h1>MUnit Coverage Report</h1>
+            ${{ steps.getTestingReport.outputs.result }}
+          allow-repeats: false 

@@ -1,0 +1,102 @@
+name: 201-generateMuleApp
+
+on:
+  workflow_call:
+    inputs:
+      BRANCH_NAME:
+        required: true
+        type: string
+      COMMIT_MESSAGE:
+        required: true
+        type: string
+      ARCHETYPE_GROUP_ID:
+        required: true
+        type: string
+      ARCHETYPE_ARTIFACT_ID:
+        required: true
+        type: string
+      ARCHETYPE_VERSION:
+        required: true
+        type: string
+      MULE_APP_GROUP_ID:
+        required: true
+        type: string
+      MULE_APP_VERSION:
+        required: true
+        type: string
+      FLOW_NO:
+        required: false
+        default: '1'
+        type: string
+      FLOW_NAME:
+        required: false
+        default: 'sample-flow'
+        type: string
+
+env:
+  ASSUME_ROLE: arn:aws:iam::335717333268:role/iam_role_github_actoins
+  AWS_REGION: ap-northeast-1
+  ARCHETYPE_REPOSITORY_URL: https://ctc-mule-artifact-snapshots-335717333268.d.codeartifact.ap-northeast-1.amazonaws.com/maven/mule-app-templates/
+
+jobs:
+  generate-mule-app:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+
+      ########################################################################################################################
+      # 1. Get AWS CodeArtifact Token
+      ########################################################################################################################
+      - name: Configure AWS Credentials 
+        uses: aws-actions/configure-aws-credentials@master
+        with:
+          role-to-assume: ${{ env.ASSUME_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ctcGitHubActionSession
+
+      - name: Get AWS CodeArtifact Token
+        id: getCodeArtifactToken
+        run: |
+          CODEARTIFACT_TOKEN=$(aws codeartifact get-authorization-token --domain ctc-mule-artifact-snapshots --query authorizationToken --output text)
+          echo "::add-mask::${CODEARTIFACT_TOKEN}"
+          echo ::set-output name=CODEARTIFACT_TOKEN::${CODEARTIFACT_TOKEN}
+
+
+      ########################################################################################################################
+      # 2. Configure maven-settings.xml
+      ########################################################################################################################
+      - name: Configure maven-settings.xml
+        uses: whelk-io/maven-settings-xml-action@v4
+        with:
+          repositories: '[{ "id": "archetype", "url": "${{ env.ARCHETYPE_REPOSITORY_URL }}", "releases": { "enabled": "true" }, "snapshots": { "enabled": "true" } }]'
+          servers: '[{ "id": "archetype", "username": "aws", "password": "${{ steps.getCodeArtifactToken.outputs.CODEARTIFACT_TOKEN }}" }]'
+
+
+      ########################################################################################################################
+      # 3. Generate Mule App from maven archetype
+      ########################################################################################################################
+      - name: Checkout
+        uses: actions/checkout@v2
+   
+      - name: Create branch
+        if: github.ref_name != inputs.BRANCH_NAME
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git switch -c ${{ inputs.BRANCH_NAME }}
+          git push -u origin ${{ inputs.BRANCH_NAME }}
+
+      - name: Generate Mule App
+        run: |
+          cd ../
+          mvn archetype:generate -B -DarchetypeGroupId=${{ inputs.ARCHETYPE_GROUP_ID }} -DarchetypeArtifactId=${{ inputs.ARCHETYPE_ARTIFACT_ID }} -DarchetypeVersion=${{ inputs.ARCHETYPE_VERSION }} -DgroupId=${{ inputs.MULE_APP_GROUP_ID }} -DartifactId=${{ github.event.repository.name }} -Dversion=${{ inputs.MULE_APP_VERSION }} -DflowNo=${{ inputs.FLOW_NO }} -DflowName=${{ inputs.FLOW_NAME }}
+
+      - name: Add and Commit
+        uses: EndBug/add-and-commit@v7
+        with:
+          branch: ${{ inputs.BRANCH_NAME }}
+          message: ${{ inputs.COMMIT_MESSAGE }}
+          add: .

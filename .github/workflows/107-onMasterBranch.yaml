@@ -1,0 +1,75 @@
+name: 107-onMasterBranch
+
+on:
+  pull_request:
+    branches: master
+    types:
+      - opened
+      - closed
+
+  workflow_dispatch:
+    branches: master
+    inputs:
+      confirmation:
+        description: 'If you will run this flow, input predefined words.'
+        required: true
+        default: ''
+
+jobs:
+
+  # release preparation
+  create-release-tag-string:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+    outputs:
+      tag_string: ${{ steps.create-release-tag-string.outputs.tag_string }}
+    steps:
+      - name: Create tag string
+        id: create-release-tag-string
+        run: |
+          tag_string=$(echo '${{ github.event.pull_request.head.ref }}' | sed 's/release\///')
+          echo ::set-output name=tag_string::${tag_string}
+
+  call-createTagflowForRelease:
+    needs: create-release-tag-string
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+    uses: ./.github/workflows/204-createTag.yaml
+    with:
+      TAG_STRING: ${{needs.create-release-tag-string.outputs.tag_string}}
+    
+
+  # hotfix preparation
+  create-hotfix-tag-string:
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'hotfix/')
+    outputs:
+      tag_string: ${{ steps.create-hotfix-tag-string.outputs.tag_string }}
+    steps:
+      - name: Create tag string
+        id: create-hotfix-tag-string
+        run: |
+          tag_string=$(echo '${{ github.event.pull_request.head.ref }}' | sed 's/hotfix\///')
+          echo ::set-output name=tag_string::${tag_string}
+
+  call-createTagflowForHotfix:
+    needs: create-hotfix-tag-string
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'hotfix/')
+    uses: ./.github/workflows/204-createTag.yaml
+    with:
+      TAG_STRING: ${{needs.create-hotfix-tag-string.outputs.tag_string}}
+
+
+  # Deploy to cloudhub production
+  call-runMunitTestflow:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirmation == 'I have confirmed to run the production deploy'
+    uses: ./.github/workflows/202-runMunitTest.yaml
+    with:
+      TARGET_TEST_SUITE: 'unit'
+
+  call-deployToCloudHubflow:
+    needs: call-runMunitTestflow
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirmation == 'I have confirmed to run the production deploy'
+    uses: ./.github/workflows/203-deployToCloudHub.yaml
+    with:
+      DEPLOY_TARGET_ENV: 'prod'
+      DEPLOY_TARGET_ENV_NAME: 'commufa-prod-env'

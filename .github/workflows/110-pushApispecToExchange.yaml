@@ -1,0 +1,97 @@
+name: 110-pushApispecToExchange
+
+on:
+  # Triggers the workflow on pull request events only when any file changes under src/main/resources/api
+  pull_request:
+    types: closed
+    paths:
+      - docs/apispec/**
+ 
+  workflow_dispatch:
+
+env:
+  ASSUME_ROLE: arn:aws:iam::335717333268:role/iam_role_github_actoins
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  push-apispec-to-exchange:
+    # If triggeed by pull requests, execute the workflow only when pull request is merged
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+
+      ########################################################################################################################
+      # 1. Get secrets from AWS security manager
+      ########################################################################################################################
+      - name: Configure AWS Credentials 
+        uses: aws-actions/configure-aws-credentials@master
+        with:
+          role-to-assume: ${{ env.ASSUME_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ctcGitHubActionSession
+
+      - name: Read secrets from AWS Secrets Manager
+        uses: abhilash1in/aws-secrets-manager-action@v2.0.0
+        with:
+          secrets: |
+            ANYPOINTPF*
+          parse-json: true
+
+
+      ########################################################################################################################
+      # 2. Get Access Token for Exchange API
+      ########################################################################################################################
+      - name: Get Access Token
+        id: get_access_token
+        run: |
+            accessToken=$(curl -s \
+                               -X POST \
+                               -H "Content-Type: application/json" \
+                               -d '{"username":"${{ env.ANYPOINTPF_USERNAME}}", "password":"${{ env.ANYPOINTPF_PASSWORD }}"}' \
+                               https://anypoint.mulesoft.com/accounts/login | jq '.access_token')
+            echo ::set-output name=accessToken::$accessToken
+
+
+      ########################################################################################################################
+      # 3. Upload API Spec to Exchange
+      ########################################################################################################################
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Zip and Upload API Spec to Exchange
+        id: push_apispec_to_exchange
+        run: |
+            . $GITHUB_WORKSPACE/docs/apispec/api.properties
+            echo "assetId=$assetId"
+            echo "assetName=$assetName"
+            echo "assetDescription=$assetDescription"
+            echo "assetVersion=$assetVersion"
+            echo "mainFile=$mainFile"
+            echo "apiVersion=$apiVersion"
+            cd $GITHUB_WORKSPACE/docs/apispec/
+            zip -q -r $GITHUB_WORKSPACE/api.zip *
+            cd $GITHUB_WORKSPACE/
+            unzip -v api.zip
+            ls -al
+            res=$(curl -s \
+                       -w "%{http_code}" \
+                       -H "Authorization: Bearer ${{steps.get_access_token.outputs.accessToken}}" \
+                       -H "x-sync-publication: true" \
+                       -F "name=$assetName" \
+                       -F "description=$assetDescription" \
+                       -F "properties.mainFile=$mainFile" \
+                       -F "properties.apiVersion=$apiVersion" \
+                       -F "files.raml.zip=@./api.zip" \
+                       https://anypoint.mulesoft.com/exchange/api/v2/organizations/${{ env.ANYPOINTPF_BUSINESSGROUPID }}/assets/${{ env.ANYPOINTPF_BUSINESSGROUPID }}/$assetId/$assetVersion)
+            echo $res
+            httpStatus=$(echo $res | sed 's/^.*\(.\{3\}\)$/\1/')
+            echo "httpStatus=$httpStatus"
+            echo ::set-output name=httpStatus::$httpStatus
+
+      - name: Check error
+        if: ${{steps.push_apispec_to_exchange.outputs.httpStatus != '201'}} 
+        run: exit 1

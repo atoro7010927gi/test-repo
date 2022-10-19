@@ -1,0 +1,136 @@
+name: 203-deployToCloubHub
+
+on:
+  workflow_call:
+    inputs:
+      # DEPLOY_TARGET_ENV should be "dev", "stg", or "prod"
+      DEPLOY_TARGET_ENV:
+        required: true
+        type: string
+      DEPLOY_TARGET_ENV_NAME:
+        required: true
+        type: string
+
+env:
+  ASSUME_ROLE_PROD: arn:aws:iam::364843989254:role/iam_role_github_actoins
+  ASSUME_ROLE_STG: arn:aws:iam::335717333268:role/iam_role_github_actoins
+  ASSUME_ROLE_DEV: arn:aws:iam::335717333268:role/iam_role_github_actoins
+  RELEASE_REPOSITORY_URL: XXX
+  SNAPSHOT_REPOSITORY_URL: XXX
+  AWS_REGION_PROD: ap-northeast-1
+  AWS_REGION_STG: ap-northeast-3
+  AWS_REGION_DEV: ap-northeast-1
+
+jobs:
+ deploy-to-cloudhub:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+
+      ########################################################################################################################
+      # 1. Set environment
+      ########################################################################################################################
+      - name: Set prod environment
+        if: ${{ inputs.DEPLOY_TARGET_ENV == 'prod'}}
+        run: |
+          echo "ASSUME_ROLE=${{ env.ASSUME_ROLE_PROD }}" >> $GITHUB_ENV
+          echo "REPOSITORY_URL=${{ env.RELEASE_REPOSITORY_URL }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.AWS_REGION_PROD }}" >> $GITHUB_ENV
+
+      - name: Set stg environment
+        if: ${{ inputs.DEPLOY_TARGET_ENV == 'stg'}}
+        run: |
+          echo "ASSUME_ROLE=${{ env.ASSUME_ROLE_STG }}" >> $GITHUB_ENV
+          echo "REPOSITORY_URL=${{ env.SNAPSHOT_REPOSITORY_URL }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.AWS_REGION_STG }}" >> $GITHUB_ENV
+
+      - name: Set dev environment
+        if: ${{ inputs.DEPLOY_TARGET_ENV == 'dev'}}
+        run: |
+          echo "ASSUME_ROLE=${{ env.ASSUME_ROLE_DEV }}" >> $GITHUB_ENV
+          echo "REPOSITORY_URL=${{ env.SNAPSHOT_REPOSITORY_URL }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.AWS_REGION_DEV }}" >> $GITHUB_ENV
+
+
+      ########################################################################################################################
+      # 2. Configure secure property key array from mule-artifact.json
+      ########################################################################################################################
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Get secure property key array from mule-artifact.json
+        id: getSecretNameArray
+        run: |
+          secretNameArray=$(cat ./mule-artifact.json | jq -c -r '.secureProperties[] | split(".") | .[0]' | awk '!a[$0]++' | awk '{print toupper($0) "*"}')
+          echo "Secure property keys are ${secretNameArray[@]}"
+          echo ::set-output name=secretNameArray::${secretNameArray//$'\n'/'%0A'}
+
+
+      ########################################################################################################################
+      # 3. Get secrets from AWS security manager
+      ########################################################################################################################
+      - name: Configure AWS Credentials 
+        uses: aws-actions/configure-aws-credentials@master
+        with:
+          role-to-assume: ${{ env.ASSUME_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ctcGitHubActionSession
+
+      - name: Read secrets from AWS Secrets Manager
+        uses: abhilash1in/aws-secrets-manager-action@v2.0.0
+        with:
+          secrets: |
+            MULE_ENTERPRISE_REPOSITORY*
+            ANYPOINTPF*
+            ${{ steps.getSecretNameArray.outputs.secretNameArray }}
+          parse-json: true
+
+
+      ########################################################################################################################
+      # 4. Configure maven-settings.xml
+      ########################################################################################################################
+      - name: Configure maven-settings.xml
+        uses: whelk-io/maven-settings-xml-action@v4
+        with:
+          servers: |
+            [
+              { "id": "mule-enterprise-repository", "username": "${{ env.MULE_ENTERPRISE_REPOSITORY_USERNAME}}", "password": "${{ env.MULE_ENTERPRISE_REPOSITORY_PASSWORD}}" },
+              { "id": "ctc-exchange", "username": "${{ env.ANYPOINTPF_USERNAME}}", "password": "${{ env.ANYPOINTPF_PASSWORD}}" },
+              { "id": "commufa-exchange", "username": "${{ env.ANYPOINTPF_USERNAME}}", "password": "${{ env.ANYPOINTPF_PASSWORD}}" }
+            ]
+
+
+      ########################################################################################################################
+      # 5. Deploy app to CloudHub
+      ########################################################################################################################
+      - name: Restore Cache local Maven repository
+        uses: actions/cache@v2
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Deploy app to cloudhub
+        run: |
+            securePropKeyArray=$(cat ./mule-artifact.json | jq -c -r '.secureProperties[]' | tr '\n' ' ')
+            for item in $securePropKeyArray
+            do
+              key=$(echo $item | awk '{if (gsub(/\./, "_")) print toupper($0)}')
+              value=$(printenv $key)
+              export eval $key=$value
+            done
+            export DEPLOYINFO_ENVIRONMENT_NAME=${{ inputs.DEPLOY_TARGET_ENV_NAME }}
+            export DEPLOYINFO_MAJOR_VERSION=`mvn help:evaluate -Dexpression=project.version -q -DforceStdout | cut -f 1 -d "."`
+            mvn clean package deploy -DmuleDeploy -DskipTests -P${{ inputs.DEPLOY_TARGET_ENV }}
+
+      - name: Cache local Maven repository
+        uses: actions/cache@v2
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-

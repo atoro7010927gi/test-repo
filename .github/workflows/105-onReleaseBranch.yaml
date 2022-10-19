@@ -1,0 +1,25 @@
+name: 105-onReleaseBranch
+
+on:
+  workflow_dispatch:
+    branches: release/**
+    inputs:
+      confirmation:
+        description: 'If you will run this flow, input predefined words.'
+        required: true
+        default: ''
+
+jobs:
+  call-runMunitTestflow:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirmation == 'I have confirmed to run the staging deploy'
+    uses: ./.github/workflows/202-runMunitTest.yaml
+    with:
+      TARGET_TEST_SUITE: 'unit'
+
+  call-deployToCloudHubflow:
+    needs: call-runMunitTestflow
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirmation == 'I have confirmed to run the staging deploy'
+    uses: ./.github/workflows/203-deployToCloudHub.yaml
+    with:
+      DEPLOY_TARGET_ENV: 'stg'
+      DEPLOY_TARGET_ENV_NAME: 'commufa-stg-env'
